@@ -29,7 +29,10 @@ workflow:
         D2 --> D
         
         E --> F[Dev: Implement Story<br/>with quality gates]
-        F --> G{Dev: Pre-Review Validation<br/>quality gates + DoD}
+        F --> F1[QA: User Journey<br/>Validation]
+        F --> F2[Architect: Implementation<br/>Verification]
+        F1 --> G{Dev: Pre-Review Validation<br/>quality gates + DoD}
+        F2 --> G
         G -->|Pass| H[Round 1 Reviews<br/>Parallel]
         G -->|Fail| G2[Dev: Fix Issues<br/>max 5 retries]
         G2 --> G
@@ -78,7 +81,7 @@ workflow:
         classDef parallel fill:#f0f4f8
         
         class A1,B,E phase1
-        class F,G phase2
+        class F,F1,F2,G phase2
         class H,H1,H2,H3,H4,H5,I,J,J2,K phase3
         class L,M phase4
         class N phase5
@@ -172,10 +175,37 @@ workflow:
       notes: "REQUIRED: Use Task tool for execution - Complete story implementation with validation (includes project quality gates)"
       story_status_update: "In Progress"
       
+    - step: user_journey_validation
+      agent: qa
+      action: user-journey-validation
+      requires: implement_story
+      inputs:
+        - story_file
+        - acceptance_criteria
+        - ux_validation_template
+      time_box: "4 hours maximum"
+      condition: "if_story_has_user_interaction"
+      notes: "REQUIRED: Use Task tool for execution - QA validates complete user workflow + basic usability heuristics"
+      collaboration: ux-expert
+      story_status_update: "User Journey Validated"
+      
+    - step: implementation_verification
+      agent: architect
+      action: implementation-verification
+      requires: implement_story
+      inputs:
+        - story_file
+        - acceptance_criteria
+        - architectural_checklist
+      time_box: "2 hours maximum"
+      notes: "REQUIRED: Use Task tool for execution - Architect verifies code quality, architectural alignment, technical debt prevention"
+      feedback_type: "actionable_recommendations"
+      story_status_update: "Implementation Verified"
+      
     - step: pre_review_validation
       agent: dev
       action: execute-checklist
-      requires: implement_story
+      requires: [user_journey_validation, implementation_verification]
       inputs:
         - story_file
       checklist: story-dod-checklist.md

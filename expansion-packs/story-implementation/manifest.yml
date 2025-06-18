@@ -1,10 +1,10 @@
 name: story-implementation
-version: 3.0.0
+version: 4.0.0
 description: >-
-  Dual-variant story implementation system with workflow optimization.
-  Simple: UI/content changes with streamlined validation (9 steps, 2-3 days)
-  Standard: Feature implementation with comprehensive validation (16 steps, 4-5 days)
-  Includes complexity validation warnings and Task tool execution requirements.
+  Dual-variant story implementation with user journey validation and implementation verification.
+  Simple: UI/content changes with validation (10 steps, 2-3 days)
+  Standard: Feature implementation with comprehensive validation (17 steps, 4-5 days)
+  Includes user journey validation, implementation verification, and Task tool execution requirements.
 author: BMAD Development Team
 bmad_version: "4.0.0"
 
@@ -18,6 +18,9 @@ files:
     - approve-story-for-development.md
     - setup-development-environment.md
     - implement-story-development.md
+    - user-journey-validation.md
+    - implementation-verification.md
+    - validation-templates.md
     - consolidate-review-feedback.md
     - implement-consolidated-fixes.md
     - validate-consolidated-fixes.md
@@ -61,22 +64,25 @@ required_data: []
 
 # Post-install message
 post_install_message: |
-  Story Implementation Pack (Phase 1-6) ready!
+  Story Implementation Pack v4.0 ready!
   
   Phase 1: Story Preparation (Epic → Story Ready for Development)
   Phase 2: Implementation (Story Development with Validation)
-  Phase 3: Quality Review (Comprehensive Round 1 + Efficient Round 2+)
-  Phase 4: Learning Extraction (Triage + Collaborative Review)
-  Phase 5: Commit and PR Preparation (Context Generation)
-  Phase 6: PR Creation and Epic Progress (Delivery + Tracking)
+  Phase 3: User Journey & Implementation Verification (QA + Architect validation)
+  Phase 4: Quality Review (Comprehensive Round 1 + Efficient Round 2+)
+  Phase 5: Learning Extraction (Triage + Collaborative Review)
+  Phase 6: Commit and PR Preparation (Context Generation)
+  Phase 7: PR Creation and Epic Progress (Delivery + Tracking)
   
   Features:
   - Epic validation before story creation
+  - User Journey Validation (QA-led) with usability heuristics
+  - Implementation Verification (Architect-led) with technical debt prevention
   - Project-agnostic code generation and build tool integration
   - Round 1: Comprehensive reviews (Architecture, Business, Process, QA, UX)
   - Feedback consolidation with REQUIRED-FOR-COMPLETION/QUALITY-STANDARD/IMPROVEMENT classification
   - Round 2+: Efficient architect-only validation with browser MCP testing
-  - Story status tracking throughout workflow (Draft → Approved → In Progress → Review → Done → Delivered)
+  - Story status tracking throughout workflow (Draft → Approved → In Progress → Verified → Review → Done → Delivered)
   - Story-based documentation for evidence and tracking
   - Learning extraction with structured triage system (6 categories)
   - Party mode collaborative learning review with team consensus
@@ -102,8 +108,8 @@ post_install_message: |
   - Seamless integration with final story PR
   
   Usage:
-    *workflow story-simple epic_number=X story_number=Y        # 9 steps, streamlined for simple changes
-    *workflow story-implementation epic_number=X story_number=Y # 16 steps, comprehensive for features
+    *workflow story-simple epic_number=X story_number=Y        # 10 steps, streamlined for simple changes
+    *workflow story-implementation epic_number=X story_number=Y # 17 steps, comprehensive for features
   
   Workflow Selection Guide:
   - story-simple: UI/UX improvements, content updates, simple bug fixes, minor backend changes
