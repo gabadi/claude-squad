@@ -34,16 +34,20 @@ func NewProjectHistoryOverlay(projectManager *project.ProjectManager) *ProjectHi
 		return nil
 	}
 
-	// Get recent project paths
-	recentPaths := projectManager.GetRecentProjectPaths()
+	// Get all existing projects (already sorted by LastAccessed)
+	allProjects := projectManager.ListProjects()
+	projectPaths := make([]string, len(allProjects))
+	for i, project := range allProjects {
+		projectPaths[i] = project.Path
+	}
 
 	overlay := &ProjectHistoryOverlay{
 		projectManager: projectManager,
 		submitted:      false,
 		canceled:       false,
 		selectedPath:   "",
-		projectPaths:   recentPaths,
-		filteredPaths:  recentPaths, // Initially show all
+		projectPaths:   projectPaths,
+		filteredPaths:  projectPaths, // Initially show all
 		selectedIndex:  0,
 		searchMode:     false,
 		searchQuery:    "",
@@ -111,8 +115,12 @@ func (p *ProjectHistoryOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 	case "c":
 		// Clear history - keep last 10 (UX spec)
 		if err := p.projectManager.ClearProjectHistory(10); err == nil {
-			// Refresh the display
-			p.projectPaths = p.projectManager.GetRecentProjectPaths()
+			// Refresh the display with all projects
+			allProjects := p.projectManager.ListProjects()
+			p.projectPaths = make([]string, len(allProjects))
+			for i, project := range allProjects {
+				p.projectPaths[i] = project.Path
+			}
 			p.filteredPaths = p.projectPaths
 			p.selectedIndex = 0
 		}
@@ -207,7 +215,7 @@ func (p *ProjectHistoryOverlay) Render() string {
 	var content string
 
 	if len(p.projectPaths) == 0 {
-		content = "No recent projects found.\n\nStart by adding a project with 'n' for new manual entry."
+		content = "No projects found.\n\nStart by adding a project with 'n' for new manual entry."
 		helpText := "\nPress 'n' for new project or 'q' to cancel"
 		helpStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241")).
@@ -216,7 +224,7 @@ func (p *ProjectHistoryOverlay) Render() string {
 	} else {
 		// Header with count
 		totalCount := len(p.projectPaths)
-		headerText := fmt.Sprintf("Recent Projects (%d total):", totalCount)
+		headerText := fmt.Sprintf("Projects (%d total):", totalCount)
 		content = headerText + "\n"
 
 		// Show search info if in search mode or filter is active

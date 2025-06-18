@@ -40,10 +40,11 @@ func TestEpic1Story1AcceptanceCriteria(t *testing.T) {
 		assert.Error(t, err, "Should reject relative paths")
 		assert.Contains(t, err.Error(), "absolute")
 
-		// Test that duplicate paths are rejected
-		_, err = manager.AddProject(tempDir, "Duplicate Project")
-		assert.Error(t, err, "Should reject duplicate paths")
-		assert.Contains(t, err.Error(), "already exists")
+		// Test that duplicate paths are reactivated (new behavior)
+		reactivatedProject, err := manager.AddProject(tempDir, "Duplicate Project")
+		assert.NoError(t, err, "Should reactivate existing projects instead of rejecting")
+		assert.Equal(t, project.ID, reactivatedProject.ID, "Should return the same project")
+		assert.True(t, reactivatedProject.IsActive, "Reactivated project should be active")
 	})
 
 	// AC3: Projects appear in hierarchical list with visual distinction
@@ -273,9 +274,9 @@ func TestEpic1Story1AcceptanceCriteria(t *testing.T) {
 		assert.Equal(t, project2.ID, projects[0].ID)
 		assert.Equal(t, project1.ID, projects[1].ID)
 
-		// Test path validation
+		// Test path validation (duplicate paths are now allowed for reactivation)
 		err = manager.ValidateProjectPath(tempDir1)
-		assert.Error(t, err, "Should reject duplicate path")
+		assert.NoError(t, err, "Should allow duplicate path for reactivation")
 
 		newTempDir := t.TempDir()
 		err = manager.ValidateProjectPath(newTempDir)

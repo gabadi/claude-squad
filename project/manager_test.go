@@ -258,16 +258,17 @@ func TestProjectManagerAddProject(t *testing.T) {
 		assert.Equal(t, project1, manager.GetActiveProject())
 	})
 
-	t.Run("fails with duplicate path", func(t *testing.T) {
+	t.Run("reactivates project with duplicate path", func(t *testing.T) {
 		manager, _ := createTestManager(t)
 		tempDir := t.TempDir()
 
-		_, err1 := manager.AddProject(tempDir, "First Project")
-		_, err2 := manager.AddProject(tempDir, "Second Project")
+		project1, err1 := manager.AddProject(tempDir, "First Project")
+		project2, err2 := manager.AddProject(tempDir, "Second Project")
 
 		require.NoError(t, err1)
-		assert.Error(t, err2)
-		assert.Contains(t, err2.Error(), "project with path already exists")
+		require.NoError(t, err2, "Should reactivate existing project instead of failing")
+		assert.Equal(t, project1.ID, project2.ID, "Should return the same project")
+		assert.True(t, project2.IsActive, "Reactivated project should be active")
 	})
 
 	t.Run("fails with non-existent path", func(t *testing.T) {
@@ -483,7 +484,7 @@ func TestProjectManagerValidateProjectPath(t *testing.T) {
 		assert.Contains(t, err.Error(), "project path does not exist")
 	})
 
-	t.Run("fails with duplicate path", func(t *testing.T) {
+	t.Run("allows duplicate path for reactivation", func(t *testing.T) {
 		tempDir := t.TempDir()
 
 		_, err := manager.AddProject(tempDir, "Existing Project")
@@ -491,8 +492,7 @@ func TestProjectManagerValidateProjectPath(t *testing.T) {
 
 		err = manager.ValidateProjectPath(tempDir)
 
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "project with path already exists")
+		assert.NoError(t, err, "Should allow duplicate path for reactivation")
 	})
 }
 
@@ -592,15 +592,15 @@ func TestProjectManagerEdgeCases(t *testing.T) {
 		tempDir := t.TempDir()
 
 		// Create project with clean path
-		_, err1 := manager.AddProject(tempDir, "Project 1")
+		project1, err1 := manager.AddProject(tempDir, "Project 1")
 		require.NoError(t, err1)
 
-		// Try to add same project with unclean path (should fail)
+		// Try to add same project with unclean path (should reactivate)
 		uncleanlPath := tempDir + "//../" + filepath.Base(tempDir)
-		_, err2 := manager.AddProject(uncleanlPath, "Project 2")
+		project2, err2 := manager.AddProject(uncleanlPath, "Project 2")
 
-		assert.Error(t, err2)
-		assert.Contains(t, err2.Error(), "project with path already exists")
+		assert.NoError(t, err2, "Should reactivate project with cleaned path")
+		assert.Equal(t, project1.ID, project2.ID, "Should return same project after path cleaning")
 	})
 }
 

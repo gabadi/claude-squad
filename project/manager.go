@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 )
 
 // ProjectStorage defines the interface for project persistence
@@ -54,19 +55,25 @@ func NewProjectManager(storage ProjectStorage) (*ProjectManager, error) {
 	return pm, nil
 }
 
-// AddProject adds a new project to the manager
+// AddProject adds a new project to the manager or reactivates existing one
 func (pm *ProjectManager) AddProject(path, name string) (*Project, error) {
-	// Create new project
-	project, err := NewProject(path, name)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create project: %w", err)
+	// Clean path for comparison
+	cleanPath := filepath.Clean(path)
+	
+	// Check if project with same path already exists - if so, reactivate it
+	for _, existing := range pm.projects {
+		if existing.Path == cleanPath {
+			// Reactivate existing project
+			existing.LastAccessed = time.Now()
+			pm.SetActiveProject(existing.ID)
+			return existing, nil
+		}
 	}
 
-	// Check if project with same path already exists
-	for _, existing := range pm.projects {
-		if existing.Path == project.Path {
-			return nil, fmt.Errorf("project with path already exists: %s", path)
-		}
+	// Create new project
+	project, err := NewProject(cleanPath, name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create project: %w", err)
 	}
 
 	// Validate path exists
@@ -202,13 +209,7 @@ func (pm *ProjectManager) ValidateProjectPath(path string) error {
 		return fmt.Errorf("project path does not exist: %s", cleanPath)
 	}
 
-	// Check if project with same path already exists
-	for _, existing := range pm.projects {
-		if existing.Path == cleanPath {
-			return fmt.Errorf("project with path already exists: %s", cleanPath)
-		}
-	}
-
+	// Note: We allow existing projects to be re-added (they will be reactivated)
 	return nil
 }
 
