@@ -267,8 +267,14 @@ func (t *TmuxSession) TapDAndEnter() error {
 	return nil
 }
 
-// setupScrollKeybindings configures tmux keybindings for scrolling with Shift+Up/Down
+// setupScrollKeybindings configures tmux keybindings for scrolling with Shift+Up/Down and enables mouse support
 func (t *TmuxSession) setupScrollKeybindings() error {
+	// Enable mouse support in tmux for wheel scrolling
+	mouseCmd := exec.Command("tmux", "set-option", "-t", t.sanitizedName, "mouse", "on")
+	if err := t.cmdExec.Run(mouseCmd); err != nil {
+		log.WarningLog.Printf("Failed to enable mouse support for session %s: %v", t.sanitizedName, err)
+	}
+
 	// Set up Shift+Up: copy existing mouse wheel up behavior
 	// This mimics the WheelUpPane binding: enter copy mode and scroll up 5 lines
 	shiftUpCmd := exec.Command("tmux", "bind-key", "-T", "root", "S-Up", 
@@ -288,7 +294,7 @@ func (t *TmuxSession) setupScrollKeybindings() error {
 		return fmt.Errorf("failed to bind Shift+Down: %w", err)
 	}
 
-	log.InfoLog.Printf("Successfully configured scroll keybindings for session %s", t.sanitizedName)
+	log.InfoLog.Printf("Successfully configured scroll keybindings and mouse support for session %s", t.sanitizedName)
 	return nil
 }
 

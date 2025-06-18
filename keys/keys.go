@@ -33,6 +33,7 @@ const (
 	KeyAddProject     // Key for adding a new project
 	KeyMCPManage      // Key for MCP management
 	KeyProjectHistory // Key for project history selection
+	KeyConsoleAttach  // Key for console attachment (Ctrl+O)
 )
 
 // GlobalKeyStringsMap is a global, immutable map string to keybinding.
@@ -59,6 +60,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"m":               KeyMCPManage,
 	"R":               KeyProjectHistory,
 	"?":               KeyHelp,
+	"ctrl+o":          KeyConsoleAttach,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName tot keybinding.
@@ -138,6 +140,10 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyProjectHistory: key.NewBinding(
 		key.WithKeys("R"),
 		key.WithHelp("R", "recent projects"),
+	),
+	KeyConsoleAttach: key.NewBinding(
+		key.WithKeys("ctrl+o"),
+		key.WithHelp("ctrl+o", "attach to console"),
 	),
 
 	// -- Special keybindings --
