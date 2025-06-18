@@ -180,6 +180,12 @@ func (t *TmuxSession) Start(workDir string) error {
 	}
 	ptmx.Close()
 
+	// Set up custom keybindings for scrolling with Shift+Up/Down
+	if err := t.setupScrollKeybindings(); err != nil {
+		log.WarningLog.Printf("Failed to setup scroll keybindings for session %s: %v", t.sanitizedName, err)
+		// Don't fail the session creation if keybinding setup fails
+	}
+
 	err = t.Restore()
 	if err != nil {
 		if cleanupErr := t.Close(); cleanupErr != nil {
@@ -258,6 +264,31 @@ func (t *TmuxSession) TapDAndEnter() error {
 	if err != nil {
 		return fmt.Errorf("error sending enter keystroke to PTY: %w", err)
 	}
+	return nil
+}
+
+// setupScrollKeybindings configures tmux keybindings for scrolling with Shift+Up/Down
+func (t *TmuxSession) setupScrollKeybindings() error {
+	// Set up Shift+Up: copy existing mouse wheel up behavior
+	// This mimics the WheelUpPane binding: enter copy mode and scroll up 5 lines
+	shiftUpCmd := exec.Command("tmux", "bind-key", "-T", "root", "S-Up", 
+		"if-shell", "-F", "#{||:#{pane_in_mode},#{mouse_any_flag}}", 
+		"send-keys -X -N 5 scroll-up", 
+		"copy-mode -e \\; send-keys -X -N 5 scroll-up")
+	if err := t.cmdExec.Run(shiftUpCmd); err != nil {
+		return fmt.Errorf("failed to bind Shift+Up: %w", err)
+	}
+
+	// Set up Shift+Down: copy existing mouse wheel down behavior  
+	shiftDownCmd := exec.Command("tmux", "bind-key", "-T", "root", "S-Down",
+		"if-shell", "-F", "#{||:#{pane_in_mode},#{mouse_any_flag}}",
+		"send-keys -X -N 5 scroll-down",
+		"copy-mode -e \\; send-keys -X -N 5 scroll-down")
+	if err := t.cmdExec.Run(shiftDownCmd); err != nil {
+		return fmt.Errorf("failed to bind Shift+Down: %w", err)
+	}
+
+	log.InfoLog.Printf("Successfully configured scroll keybindings for session %s", t.sanitizedName)
 	return nil
 }
 

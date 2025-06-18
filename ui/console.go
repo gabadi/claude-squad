@@ -119,7 +119,7 @@ func (c *ConsolePane) UpdateContent(instance *session.Instance) error {
 	}
 
 	if len(content) == 0 {
-		c.setFallbackStateWithPrompt("Console session ready. Press Enter to attach.", instance)
+		c.setFallbackStateWithPrompt("Console session ready. Use Shift+↑/↓ or mouse wheel to scroll, Ctrl+O to attach.", instance)
 		return nil
 	}
 
@@ -173,10 +173,6 @@ func (c *ConsolePane) UpdateContent(instance *session.Instance) error {
 
 // ScrollUp scrolls the viewport up
 func (c *ConsolePane) ScrollUp() {
-	// If already at top, don't scroll - let tmux handle history navigation
-	if c.viewport.AtTop() {
-		return
-	}
 	c.viewport.LineUp(1)
 	// Update the map with the modified viewport
 	c.syncViewportToMap()
@@ -191,10 +187,6 @@ func (c *ConsolePane) ScrollDown() {
 
 // FastScrollUp scrolls the viewport up by 10 lines
 func (c *ConsolePane) FastScrollUp() {
-	// If already at top, don't scroll - let tmux handle history navigation
-	if c.viewport.AtTop() {
-		return
-	}
 	c.viewport.LineUp(10)
 	// Update the map with the modified viewport
 	c.syncViewportToMap()
