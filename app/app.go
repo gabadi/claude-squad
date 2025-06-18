@@ -854,6 +854,17 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, m.handleError(err)
 		}
 		return m, tea.WindowSize()
+	case keys.KeyConsoleAttach:
+		if m.list.NumInstances() == 0 {
+			return m, nil
+		}
+		selected := m.list.GetSelectedInstance()
+		if selected == nil || selected.Paused() {
+			return m, nil
+		}
+
+		// Ctrl+O is no longer needed - Enter now handles console attachment
+		return m, nil
 	case keys.KeyEnter:
 		if m.list.NumInstances() == 0 {
 			return m, nil
@@ -863,7 +874,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 
-		// Handle console tab attachment
+		// Handle console tab - attach to console session  
 		if m.tabbedWindow.IsInConsoleTab() {
 			if !selected.ConsoleAlive() {
 				return m, m.handleError(fmt.Errorf("console session not available"))

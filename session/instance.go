@@ -327,13 +327,13 @@ func (i *Instance) ConsolePreview() (string, error) {
 		}
 	}
 
-	content, err := i.consoleTmuxSession.CapturePaneContent()
+	content, err := i.consoleTmuxSession.CapturePaneContentWithOptions("-", "-")
 	if err != nil {
 		return fmt.Sprintf("Error getting console content: %v", err), nil
 	}
 
 	if content == "" {
-		return "Console session ready. Press Enter to attach.", nil
+		return "Console session ready. Use Shift+↑/↓ or mouse wheel to scroll, Ctrl+O to attach.", nil
 	}
 
 	return content, nil
