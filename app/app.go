@@ -575,12 +575,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			shouldClose := m.projectHistoryOverlay.HandleKeyPress(msg)
 			if shouldClose || m.projectHistoryOverlay.IsSubmitted() || m.projectHistoryOverlay.IsCanceled() {
 				selectedPath := m.projectHistoryOverlay.GetSelectedPath()
+				wasSubmitted := m.projectHistoryOverlay.IsSubmitted()
 
 				m.state = stateDefault
 				m.projectHistoryOverlay = nil
 
 				// Handle the selected path
-				if m.projectHistoryOverlay.IsSubmitted() && selectedPath != "" {
+				if wasSubmitted && selectedPath != "" {
 					if selectedPath == "NEW_MANUAL" {
 						// User chose "new manual" - show the add project overlay
 						m.state = stateAddProject
