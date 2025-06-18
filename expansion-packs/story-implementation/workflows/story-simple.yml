@@ -15,7 +15,8 @@ workflow:
         A1 -->|No| A2[PO: Approve Story<br/>Skip Epic if <7 days]
         A2 --> B
         
-        B --> C{Dev: Pre-Review<br/>Validation DoD}
+        B --> B1[Architect: Implementation<br/>Verification]
+        B1 --> C{Dev: Pre-Review<br/>Validation DoD}
         C -->|Pass| D[Architect: Review<br/>Technical Design]
         C -->|Fail| C2[Dev: Fix Issues<br/>max 3 retries]
         C2 --> C
@@ -39,7 +40,7 @@ workflow:
         classDef delivery fill:#e8f5e8
         
         class A1,A2 simple
-        class C,D,E,E2 validation
+        class B1,C,D,E,E2 validation
         class B,E,E3 implementation
         class F,G,H,I,J delivery
     ```
@@ -90,10 +91,21 @@ workflow:
       notes: "REQUIRED: Use Task tool for execution - Complete story implementation with validation (includes project quality gates)"
       story_status_update: "In Progress"
       
+    - step: simple_implementation_verification
+      agent: architect
+      action: implementation-verification
+      requires: implement_story
+      inputs:
+        - story_file
+        - acceptance_criteria
+      time_box: "1 hour maximum"
+      notes: "REQUIRED: Use Task tool for execution - Architect verifies simple change meets acceptance criteria"
+      story_status_update: "Implementation Verified"
+      
     - step: pre_review_validation
       agent: dev
       action: execute-checklist
-      requires: implement_story
+      requires: simple_implementation_verification
       inputs:
         - story_file
       checklist: story-dod-checklist.md
