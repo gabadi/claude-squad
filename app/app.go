@@ -259,10 +259,20 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Action == tea.MouseActionPress {
 			switch msg.Button {
 			case tea.MouseButtonWheelUp:
-				m.tabbedWindow.ScrollUp()
+				// If no instance selected, scroll the instance list
+				if m.list.GetSelectedInstance() == nil {
+					m.list.Up()
+				} else {
+					m.tabbedWindow.ScrollUp()
+				}
 				return m, m.instanceChanged()
 			case tea.MouseButtonWheelDown:
-				m.tabbedWindow.ScrollDown()
+				// If no instance selected, scroll the instance list
+				if m.list.GetSelectedInstance() == nil {
+					m.list.Down()
+				} else {
+					m.tabbedWindow.ScrollDown()
+				}
 				return m, m.instanceChanged()
 			}
 		}
@@ -726,16 +736,36 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.list.Down()
 		return m, m.instanceChanged()
 	case keys.KeyShiftUp:
-		m.tabbedWindow.ScrollUp()
+		// If no instance selected, scroll the instance list
+		if m.list.GetSelectedInstance() == nil {
+			m.list.Up()
+		} else {
+			m.tabbedWindow.ScrollUp()
+		}
 		return m, m.instanceChanged()
 	case keys.KeyShiftDown:
-		m.tabbedWindow.ScrollDown()
+		// If no instance selected, scroll the instance list
+		if m.list.GetSelectedInstance() == nil {
+			m.list.Down()
+		} else {
+			m.tabbedWindow.ScrollDown()
+		}
 		return m, m.instanceChanged()
 	case keys.KeyCtrlShiftUp:
-		m.tabbedWindow.FastScrollUp()
+		// If no instance selected, scroll the instance list (fast)
+		if m.list.GetSelectedInstance() == nil {
+			m.list.Up()
+		} else {
+			m.tabbedWindow.FastScrollUp()
+		}
 		return m, m.instanceChanged()
 	case keys.KeyCtrlShiftDown:
-		m.tabbedWindow.FastScrollDown()
+		// If no instance selected, scroll the instance list (fast)
+		if m.list.GetSelectedInstance() == nil {
+			m.list.Down()
+		} else {
+			m.tabbedWindow.FastScrollDown()
+		}
 		return m, m.instanceChanged()
 	case keys.KeyTab:
 		m.tabbedWindow.Toggle()
@@ -892,8 +922,10 @@ func (m *home) instanceChanged() tea.Cmd {
 	}
 
 	// Save instances after changes (including restart/MCP updates)
-	if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
-		return m.handleError(err)
+	if m.storage != nil {
+		if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+			return m.handleError(err)
+		}
 	}
 
 	return nil
