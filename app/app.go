@@ -4,12 +4,14 @@ import (
 	"claude-squad/config"
 	"claude-squad/keys"
 	"claude-squad/log"
+	"claude-squad/project"
 	"claude-squad/session"
 	"claude-squad/ui"
 	"claude-squad/ui/overlay"
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -42,6 +44,12 @@ const (
 	stateHelp
 	// stateConfirm is the state when a confirmation modal is displayed.
 	stateConfirm
+	// stateAddProject is the state when the user is adding a new project.
+	stateAddProject
+	// stateMCPManage is the state when the MCP management overlay is displayed.
+	stateMCPManage
+	// stateProjectHistory is the state when the project history overlay is displayed.
+	stateProjectHistory
 )
 
 type home struct {
@@ -79,7 +87,7 @@ type home struct {
 	list *ui.List
 	// menu displays the bottom menu
 	menu *ui.Menu
-	// tabbedWindow displays the tabbed window with preview and diff panes
+	// tabbedWindow displays the tabbed window with preview, diff, and console panes
 	tabbedWindow *ui.TabbedWindow
 	// errBox displays error messages
 	errBox *ui.ErrBox
@@ -91,6 +99,14 @@ type home struct {
 	textOverlay *overlay.TextOverlay
 	// confirmationOverlay displays confirmation modals
 	confirmationOverlay *overlay.ConfirmationOverlay
+	// projectManager manages multiple projects
+	projectManager *project.ProjectManager
+	// projectInputOverlay handles project input
+	projectInputOverlay *ui.ProjectInputOverlay
+	// mcpOverlay handles MCP server management
+	mcpOverlay *overlay.MCPOverlay
+	// projectHistoryOverlay handles project history selection
+	projectHistoryOverlay *overlay.ProjectHistoryOverlay
 }
 
 func newHome(ctx context.Context, program string, autoYes bool) *home {
@@ -107,20 +123,30 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		os.Exit(1)
 	}
 
-	h := &home{
-		ctx:          ctx,
-		spinner:      spinner.New(spinner.WithSpinner(spinner.MiniDot)),
-		menu:         ui.NewMenu(),
-		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane()),
-		errBox:       ui.NewErrBox(),
-		storage:      storage,
-		appConfig:    appConfig,
-		program:      program,
-		autoYes:      autoYes,
-		state:        stateDefault,
-		appState:     appState,
+	// Initialize project manager
+	projectStorage := project.NewStateProjectStorage(appState)
+	projectManager, err := project.NewProjectManager(projectStorage)
+	if err != nil {
+		fmt.Printf("Failed to initialize project manager: %v\n", err)
+		os.Exit(1)
 	}
-	h.list = ui.NewList(&h.spinner, autoYes)
+
+	h := &home{
+		ctx:                 ctx,
+		spinner:             spinner.New(spinner.WithSpinner(spinner.MiniDot)),
+		menu:                ui.NewMenu(),
+		tabbedWindow:        ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewConsolePane()),
+		errBox:              ui.NewErrBox(),
+		storage:             storage,
+		appConfig:           appConfig,
+		program:             program,
+		autoYes:             autoYes,
+		state:               stateDefault,
+		appState:            appState,
+		projectManager:      projectManager,
+		projectInputOverlay: ui.NewProjectInputOverlay(),
+	}
+	h.list = ui.NewList(&h.spinner, autoYes, projectManager, appConfig)
 
 	// Load saved instances
 	instances, err := storage.LoadInstances()
@@ -161,6 +187,15 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 	}
 	if m.textOverlay != nil {
 		m.textOverlay.SetWidth(int(float32(msg.Width) * 0.6))
+	}
+	if m.projectInputOverlay != nil {
+		m.projectInputOverlay.SetSize(msg.Width, msg.Height)
+	}
+	if m.mcpOverlay != nil {
+		m.mcpOverlay.SetSize(int(float32(msg.Width)*0.8), int(float32(msg.Height)*0.8))
+	}
+	if m.projectHistoryOverlay != nil {
+		m.projectHistoryOverlay.SetSize(int(float32(msg.Width)*0.8), int(float32(msg.Height)*0.8))
 	}
 
 	previewWidth, previewHeight := m.tabbedWindow.GetPreviewSize()
@@ -220,17 +255,15 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tickUpdateMetadataCmd
 	case tea.MouseMsg:
-		// Handle mouse wheel scrolling in the diff view
-		if m.tabbedWindow.IsInDiffTab() {
-			if msg.Action == tea.MouseActionPress {
-				switch msg.Button {
-				case tea.MouseButtonWheelUp:
-					m.tabbedWindow.ScrollUp()
-					return m, m.instanceChanged()
-				case tea.MouseButtonWheelDown:
-					m.tabbedWindow.ScrollDown()
-					return m, m.instanceChanged()
-				}
+		// Handle mouse wheel scrolling in both preview and diff views
+		if msg.Action == tea.MouseActionPress {
+			switch msg.Button {
+			case tea.MouseButtonWheelUp:
+				m.tabbedWindow.ScrollUp()
+				return m, m.instanceChanged()
+			case tea.MouseButtonWheelDown:
+				m.tabbedWindow.ScrollDown()
+				return m, m.instanceChanged()
 			}
 		}
 		return m, nil
@@ -267,7 +300,7 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 		m.keySent = false
 		return nil, false
 	}
-	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm {
+	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm || m.state == stateAddProject || m.state == stateMCPManage || m.state == stateProjectHistory {
 		return nil, false
 	}
 	// If it's in the global keymap, we should try to highlight it.
@@ -279,9 +312,7 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 	if m.list.GetSelectedInstance() != nil && m.list.GetSelectedInstance().Paused() && name == keys.KeyEnter {
 		return nil, false
 	}
-	if name == keys.KeyShiftDown || name == keys.KeyShiftUp {
-		return nil, false
-	}
+	// Remove the shift key blocking to allow scroll functionality
 
 	// Skip the menu highlighting if the key is not in the map or we are using the shift up and down keys.
 	// TODO: cleanup: when you press enter on stateNew, we use keys.KeySubmitName. We should unify the keymap.
@@ -433,6 +464,154 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	}
 
+	// Handle add project state
+	if m.state == stateAddProject {
+		// Handle escape to cancel
+		if msg.String() == "ctrl+c" || msg.Type == tea.KeyEsc {
+			m.state = stateDefault
+			m.projectInputOverlay.Hide()
+			return m, tea.WindowSize()
+		}
+
+		// Update the project input overlay
+		var cmd tea.Cmd
+		m.projectInputOverlay, cmd = m.projectInputOverlay.Update(msg)
+
+		// Handle enter to submit
+		if msg.Type == tea.KeyEnter {
+			path := m.projectInputOverlay.GetValue()
+			if path != "" {
+				// Try to add the project
+				if err := m.projectManager.ValidateProjectPath(path); err != nil {
+					m.projectInputOverlay.SetError(err.Error())
+					return m, cmd
+				}
+
+				// Add the project
+				projectName := "" // Let NewProject generate name from path
+				project, err := m.projectManager.AddProject(path, projectName)
+				if err != nil {
+					m.projectInputOverlay.SetError(err.Error())
+					return m, cmd
+				}
+
+				// Update project history
+				if err := m.projectManager.UpdateProjectHistory(path); err != nil {
+					log.WarningLog.Printf("Failed to update project history: %v", err)
+				}
+
+				// Success - hide overlay and return to default state
+				m.state = stateDefault
+				m.projectInputOverlay.Hide()
+
+				// Optional: Set the new project as active
+				m.projectManager.SetActiveProject(project.ID)
+
+				return m, tea.WindowSize()
+			}
+		}
+
+		return m, cmd
+	}
+
+	// Handle MCP management state
+	if m.state == stateMCPManage {
+		// Handle escape to cancel
+		if msg.String() == "ctrl+c" || msg.Type == tea.KeyEsc {
+			m.state = stateDefault
+			m.mcpOverlay = nil
+			m.list.UpdateConfig() // Refresh MCP config for display
+			return m, tea.WindowSize()
+		}
+
+		// Let the MCP overlay handle the key press
+		if m.mcpOverlay != nil {
+			shouldClose := m.mcpOverlay.HandleKeyPress(msg)
+			if shouldClose || m.mcpOverlay.IsSubmitted() || m.mcpOverlay.IsCanceled() {
+				// Check if we need to restart Claude due to MCP changes
+				if m.mcpOverlay.IsSubmitted() && m.mcpOverlay.AssignmentsChanged() {
+					instance := m.mcpOverlay.GetInstance()
+					if instance != nil && instance.Started() && !instance.Paused() {
+						// Check if this is a Claude instance (only Claude needs restart for MCP changes)
+						if isClaudeInstance(instance) {
+							// Create restart command
+							restartCmd := func() tea.Msg {
+								if err := instance.Restart(); err != nil {
+									return fmt.Errorf("failed to restart Claude with new MCP configuration: %w", err)
+								}
+								return instanceChangedMsg{}
+							}
+
+							// Auto-restart without confirmation using --continue
+							m.state = stateDefault
+							m.mcpOverlay = nil
+							m.list.UpdateConfig() // Refresh MCP config for display
+							return m, func() tea.Msg { return restartCmd() }
+						}
+					}
+				}
+
+				m.state = stateDefault
+				m.mcpOverlay = nil
+				m.list.UpdateConfig() // Refresh MCP config for display
+				return m, tea.WindowSize()
+			}
+		}
+
+		return m, nil
+	}
+
+	// Handle project history state
+	if m.state == stateProjectHistory {
+		// Handle escape to cancel
+		if msg.String() == "ctrl+c" || msg.Type == tea.KeyEsc {
+			m.state = stateDefault
+			m.projectHistoryOverlay = nil
+			return m, tea.WindowSize()
+		}
+
+		// Let the project history overlay handle the key press
+		if m.projectHistoryOverlay != nil {
+			shouldClose := m.projectHistoryOverlay.HandleKeyPress(msg)
+			if shouldClose || m.projectHistoryOverlay.IsSubmitted() || m.projectHistoryOverlay.IsCanceled() {
+				selectedPath := m.projectHistoryOverlay.GetSelectedPath()
+
+				m.state = stateDefault
+				m.projectHistoryOverlay = nil
+
+				// Handle the selected path
+				if m.projectHistoryOverlay.IsSubmitted() && selectedPath != "" {
+					if selectedPath == "NEW_MANUAL" {
+						// User chose "new manual" - show the add project overlay
+						m.state = stateAddProject
+						m.projectInputOverlay.Show()
+						return m, tea.WindowSize()
+					} else {
+						// User selected an existing project path
+						// Update history to move this to the front
+						m.projectManager.UpdateProjectHistory(selectedPath)
+
+						// Try to add as a project if not already added
+						projectName := "" // Let NewProject generate name from path
+						if project, err := m.projectManager.AddProject(selectedPath, projectName); err == nil {
+							// Set as active project
+							m.projectManager.SetActiveProject(project.ID)
+						} else {
+							// Project might already exist, just update history
+							log.InfoLog.Printf("Project already exists or error adding: %v", err)
+						}
+
+						return m, tea.WindowSize()
+					}
+				}
+
+				return m, tea.WindowSize()
+			}
+		}
+
+		return m, nil
+	}
+
 	// Handle quit commands first
 	if msg.String() == "ctrl+c" || msg.String() == "q" {
 		return m.handleQuit()
@@ -451,11 +630,29 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, m.handleError(
 				fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
 		}
+		// Get active project path, default to current directory
+		projectPath := "."
+		var projectID string
+		if activeProject := m.projectManager.GetActiveProject(); activeProject != nil {
+			projectPath = activeProject.Path
+			projectID = activeProject.ID
+			// Update project history when using active project
+			if err := m.projectManager.UpdateProjectHistory(projectPath); err != nil {
+				log.WarningLog.Printf("Failed to update project history: %v", err)
+			}
+		}
 		instance, err := session.NewInstance(session.InstanceOptions{
 			Title:   "",
-			Path:    ".",
+			Path:    projectPath,
 			Program: m.program,
 		})
+		if err == nil {
+			instance.ProjectID = projectID
+			// Add instance to project if there's an active project
+			if projectID != "" {
+				m.projectManager.AddInstanceToProject(projectID, instance.Title)
+			}
+		}
 		if err != nil {
 			return m, m.handleError(err)
 		}
@@ -472,11 +669,29 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, m.handleError(
 				fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
 		}
+		// Get active project path, default to current directory
+		projectPath := "."
+		var projectID string
+		if activeProject := m.projectManager.GetActiveProject(); activeProject != nil {
+			projectPath = activeProject.Path
+			projectID = activeProject.ID
+			// Update project history when using active project
+			if err := m.projectManager.UpdateProjectHistory(projectPath); err != nil {
+				log.WarningLog.Printf("Failed to update project history: %v", err)
+			}
+		}
 		instance, err := session.NewInstance(session.InstanceOptions{
 			Title:   "",
-			Path:    ".",
+			Path:    projectPath,
 			Program: m.program,
 		})
+		if err == nil {
+			instance.ProjectID = projectID
+			// Add instance to project if there's an active project
+			if projectID != "" {
+				m.projectManager.AddInstanceToProject(projectID, instance.Title)
+			}
+		}
 		if err != nil {
 			return m, m.handleError(err)
 		}
@@ -487,6 +702,22 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.menu.SetState(ui.StateNewInstance)
 
 		return m, nil
+	case keys.KeyAddProject:
+		// Show project input overlay
+		m.state = stateAddProject
+		m.projectInputOverlay.Show()
+		return m, tea.WindowSize()
+	case keys.KeyMCPManage:
+		// Show MCP management overlay for selected instance
+		selectedInstance := m.list.GetSelectedInstance()
+		m.state = stateMCPManage
+		m.mcpOverlay = overlay.NewMCPOverlay(selectedInstance)
+		return m, tea.WindowSize()
+	case keys.KeyProjectHistory:
+		// Show project history overlay
+		m.state = stateProjectHistory
+		m.projectHistoryOverlay = overlay.NewProjectHistoryOverlay(m.projectManager)
+		return m, tea.WindowSize()
 	case keys.KeyUp:
 		m.list.Up()
 		return m, m.instanceChanged()
@@ -494,18 +725,21 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.list.Down()
 		return m, m.instanceChanged()
 	case keys.KeyShiftUp:
-		if m.tabbedWindow.IsInDiffTab() {
-			m.tabbedWindow.ScrollUp()
-		}
+		m.tabbedWindow.ScrollUp()
 		return m, m.instanceChanged()
 	case keys.KeyShiftDown:
-		if m.tabbedWindow.IsInDiffTab() {
-			m.tabbedWindow.ScrollDown()
-		}
+		m.tabbedWindow.ScrollDown()
+		return m, m.instanceChanged()
+	case keys.KeyCtrlShiftUp:
+		m.tabbedWindow.FastScrollUp()
+		return m, m.instanceChanged()
+	case keys.KeyCtrlShiftDown:
+		m.tabbedWindow.FastScrollDown()
 		return m, m.instanceChanged()
 	case keys.KeyTab:
 		m.tabbedWindow.Toggle()
 		m.menu.SetInDiffTab(m.tabbedWindow.IsInDiffTab())
+		m.menu.SetInConsoleTab(m.tabbedWindow.IsInConsoleTab())
 		return m, m.instanceChanged()
 	case keys.KeyKill:
 		selected := m.list.GetSelectedInstance()
@@ -594,7 +828,30 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Paused() || !selected.TmuxAlive() {
+		if selected == nil || selected.Paused() {
+			return m, nil
+		}
+
+		// Handle console tab attachment
+		if m.tabbedWindow.IsInConsoleTab() {
+			if !selected.ConsoleAlive() {
+				return m, m.handleError(fmt.Errorf("console session not available"))
+			}
+			// Show help screen before attaching to console
+			m.showHelpScreen(helpTypeInstanceAttach, func() {
+				ch, err := selected.AttachToConsole()
+				if err != nil {
+					m.handleError(err)
+					return
+				}
+				<-ch
+				m.state = stateDefault
+			})
+			return m, nil
+		}
+
+		// Handle regular instance attachment
+		if !selected.TmuxAlive() {
 			return m, nil
 		}
 		// Show help screen before attaching
@@ -613,7 +870,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	}
 }
 
-// instanceChanged updates the preview pane, menu, and diff pane based on the selected instance. It returns an error
+// instanceChanged updates the preview pane, menu, diff pane, and console pane based on the selected instance. It returns an error
 // Cmd if there was any error.
 func (m *home) instanceChanged() tea.Cmd {
 	// selected may be nil
@@ -623,10 +880,21 @@ func (m *home) instanceChanged() tea.Cmd {
 	// Update menu with current instance
 	m.menu.SetInstance(selected)
 
-	// If there's no selected instance, we don't need to update the preview.
+	// Update preview pane
 	if err := m.tabbedWindow.UpdatePreview(selected); err != nil {
 		return m.handleError(err)
 	}
+
+	// Update console pane
+	if err := m.tabbedWindow.UpdateConsole(selected); err != nil {
+		return m.handleError(err)
+	}
+
+	// Save instances after changes (including restart/MCP updates)
+	if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+		return m.handleError(err)
+	}
+
 	return nil
 }
 
@@ -675,6 +943,17 @@ func (m *home) handleError(err error) tea.Cmd {
 
 		return hideErrMsg{}
 	}
+}
+
+// isClaudeInstance checks if the given instance is running Claude
+func isClaudeInstance(instance *session.Instance) bool {
+	if instance == nil {
+		return false
+	}
+
+	// Check if the program contains "claude" (case-insensitive)
+	program := strings.ToLower(instance.Program)
+	return strings.Contains(program, "claude")
 }
 
 // confirmAction shows a confirmation modal and stores the action to execute on confirm
@@ -729,6 +1008,21 @@ func (m *home) View() string {
 			log.ErrorLog.Printf("confirmation overlay is nil")
 		}
 		return overlay.PlaceOverlay(0, 0, m.confirmationOverlay.Render(), mainView, true, true)
+	} else if m.state == stateAddProject {
+		if m.projectInputOverlay == nil {
+			log.ErrorLog.Printf("project input overlay is nil")
+		}
+		return overlay.PlaceOverlay(0, 0, m.projectInputOverlay.View(), mainView, true, true)
+	} else if m.state == stateMCPManage {
+		if m.mcpOverlay == nil {
+			log.ErrorLog.Printf("MCP overlay is nil")
+		}
+		return overlay.PlaceOverlay(0, 0, m.mcpOverlay.Render(), mainView, true, true)
+	} else if m.state == stateProjectHistory {
+		if m.projectHistoryOverlay == nil {
+			log.ErrorLog.Printf("project history overlay is nil")
+		}
+		return overlay.PlaceOverlay(0, 0, m.projectHistoryOverlay.Render(), mainView, true, true)
 	}
 
 	return mainView

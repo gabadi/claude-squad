@@ -1,6 +1,7 @@
 package session
 
 import (
+	"claude-squad/config"
 	"claude-squad/log"
 	"claude-squad/session/git"
 	"claude-squad/session/tmux"
@@ -51,6 +52,8 @@ type Instance struct {
 	AutoYes bool
 	// Prompt is the initial prompt to pass to the instance on startup
 	Prompt string
+	// ProjectID is the ID of the project this instance belongs to
+	ProjectID string
 
 	// DiffStats stores the current git diff statistics
 	diffStats *git.DiffStats
@@ -62,6 +65,8 @@ type Instance struct {
 	tmuxSession *tmux.TmuxSession
 	// gitWorktree is the git worktree for the instance.
 	gitWorktree *git.GitWorktree
+	// consoleTmuxSession is the tmux session for the console tab.
+	consoleTmuxSession *tmux.TmuxSession
 }
 
 // ToInstanceData converts an Instance to its serializable form
@@ -75,6 +80,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		Width:     i.Width,
 		CreatedAt: i.CreatedAt,
 		UpdatedAt: time.Now(),
+		ProjectID: i.ProjectID,
 		Program:   i.Program,
 		AutoYes:   i.AutoYes,
 	}
@@ -114,6 +120,7 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		CreatedAt: data.CreatedAt,
 		UpdatedAt: data.UpdatedAt,
 		Program:   data.Program,
+		ProjectID: data.ProjectID,
 		gitWorktree: git.NewGitWorktreeFromStorage(
 			data.Worktree.RepoPath,
 			data.Worktree.WorktreePath,
@@ -194,6 +201,14 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 	tmuxSession := tmux.NewTmuxSession(i.Title, i.Program)
 	i.tmuxSession = tmuxSession
 
+	// Create console session - use shell as program for console
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/bash"
+	}
+	consoleTmuxSession := tmux.NewTmuxSession(i.Title+"-console", shell+" -i")
+	i.consoleTmuxSession = consoleTmuxSession
+
 	if firstTimeSetup {
 		gitWorktree, branchName, err := git.NewGitWorktree(i.Path, i.Title)
 		if err != nil {
@@ -216,10 +231,17 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 	}()
 
 	if !firstTimeSetup {
-		// Reuse existing session
+		// Reuse existing sessions
 		if err := tmuxSession.Restore(); err != nil {
 			setupErr = fmt.Errorf("failed to restore existing session: %w", err)
 			return setupErr
+		}
+		if err := i.consoleTmuxSession.Restore(); err != nil {
+			// Console session restore failed, try to create a new one
+			log.WarningLog.Printf("Failed to restore console session for %s: %v, creating new one", i.Title, err)
+			if err := i.consoleTmuxSession.Start(i.gitWorktree.GetWorktreePath()); err != nil {
+				log.WarningLog.Printf("Failed to start new console session for %s: %v", i.Title, err)
+			}
 		}
 	} else {
 		// Setup git worktree first
@@ -228,7 +250,7 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 			return setupErr
 		}
 
-		// Create new session
+		// Create new sessions
 		if err := i.tmuxSession.Start(i.gitWorktree.GetWorktreePath()); err != nil {
 			// Cleanup git worktree if tmux session creation fails
 			if cleanupErr := i.gitWorktree.Cleanup(); cleanupErr != nil {
@@ -236,6 +258,20 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 			}
 			setupErr = fmt.Errorf("failed to start new session: %w", err)
 			return setupErr
+		}
+
+		// Wait for worktree to be fully ready before starting console session
+		time.Sleep(100 * time.Millisecond) // Allow worktree filesystem operations to settle
+
+		// Start console session in the same worktree
+		if err := i.consoleTmuxSession.Start(i.gitWorktree.GetWorktreePath()); err != nil {
+			// Console session failure should be more critical - at least warn properly
+			log.ErrorLog.Printf("Failed to start console session for %s: %v", i.Title, err)
+			// Retry once after a brief delay
+			time.Sleep(200 * time.Millisecond)
+			if retryErr := i.consoleTmuxSession.Start(i.gitWorktree.GetWorktreePath()); retryErr != nil {
+				log.ErrorLog.Printf("Console session retry also failed for %s: %v", i.Title, retryErr)
+			}
 		}
 	}
 
@@ -253,11 +289,17 @@ func (i *Instance) Kill() error {
 
 	var errs []error
 
-	// Always try to cleanup both resources, even if one fails
-	// Clean up tmux session first since it's using the git worktree
+	// Always try to cleanup all resources, even if one fails
+	// Clean up tmux sessions first since they're using the git worktree
 	if i.tmuxSession != nil {
 		if err := i.tmuxSession.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("failed to close tmux session: %w", err))
+		}
+	}
+
+	if i.consoleTmuxSession != nil {
+		if err := i.consoleTmuxSession.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close console tmux session: %w", err))
 		}
 	}
 
@@ -269,6 +311,49 @@ func (i *Instance) Kill() error {
 	}
 
 	return i.combineErrors(errs)
+}
+
+// ConsolePreview returns a preview of the console session content
+func (i *Instance) ConsolePreview() (string, error) {
+	if !i.started || i.consoleTmuxSession == nil {
+		return "Console not available", nil
+	}
+
+	// Check if console session exists, if not try to create it
+	if !i.consoleTmuxSession.DoesSessionExist() {
+		log.WarningLog.Printf("Console session for %s doesn't exist, attempting to create", i.Title)
+		if err := i.consoleTmuxSession.Start(i.gitWorktree.GetWorktreePath()); err != nil {
+			return fmt.Sprintf("Console session unavailable: %v", err), nil
+		}
+	}
+
+	content, err := i.consoleTmuxSession.CapturePaneContent()
+	if err != nil {
+		return fmt.Sprintf("Error getting console content: %v", err), nil
+	}
+
+	if content == "" {
+		return "Console session ready. Press Enter to attach.", nil
+	}
+
+	return content, nil
+}
+
+// AttachToConsole attaches to the console session
+func (i *Instance) AttachToConsole() (<-chan struct{}, error) {
+	if !i.started || i.consoleTmuxSession == nil {
+		return nil, fmt.Errorf("console session not available")
+	}
+
+	return i.consoleTmuxSession.Attach()
+}
+
+// ConsoleAlive checks if the console tmux session is still alive
+func (i *Instance) ConsoleAlive() bool {
+	if !i.started || i.consoleTmuxSession == nil {
+		return false
+	}
+	return i.consoleTmuxSession.DoesSessionExist()
 }
 
 // combineErrors combines multiple errors into a single error
@@ -299,7 +384,8 @@ func (i *Instance) Preview() (string, error) {
 	if !i.started || i.Status == Paused {
 		return "", nil
 	}
-	return i.tmuxSession.CapturePaneContent()
+	// Capture all history instead of just visible content
+	return i.tmuxSession.CapturePaneContentWithOptions("-", "-")
 }
 
 func (i *Instance) HasUpdated() (updated bool, hasPrompt bool) {
@@ -513,5 +599,100 @@ func (i *Instance) SendPrompt(prompt string) error {
 		return fmt.Errorf("error tapping enter: %w", err)
 	}
 
+	return nil
+}
+
+// Restart terminates and restarts the tmux session while preserving worktree and other state
+// This is useful when MCP configuration changes and Claude needs to be restarted with new config
+func (i *Instance) Restart() error {
+	if !i.started {
+		return fmt.Errorf("cannot restart instance that has not been started")
+	}
+	if i.Status == Paused {
+		return fmt.Errorf("cannot restart paused instance")
+	}
+
+	// Check if there are any changes to commit before restart
+	if dirty, err := i.gitWorktree.IsDirty(); err != nil {
+		log.ErrorLog.Printf("failed to check if worktree is dirty before restart: %v", err)
+		// Continue with restart even if we can't check dirty status
+	} else if dirty {
+		// Commit changes with timestamp before restart
+		commitMsg := fmt.Sprintf("[claudesquad] auto-commit before Claude restart on %s", time.Now().Format(time.RFC822))
+		if err := i.gitWorktree.PushChanges(commitMsg, false); err != nil {
+			log.ErrorLog.Printf("failed to commit changes before restart: %v", err)
+			// Continue with restart even if commit fails - user can manually recover
+		}
+	}
+
+	// Store current worktree path before closing sessions
+	worktreePath := i.gitWorktree.GetWorktreePath()
+
+	// Update program command with new MCP configuration for this worktree
+	cfg := config.LoadConfig()
+	i.Program = config.ModifyCommandWithMCPForWorktree(i.Program, cfg, worktreePath)
+
+	// Add --continue for restart to maintain session context
+	if !strings.Contains(i.Program, "--continue") {
+		i.Program += " --continue"
+	}
+
+	// Close existing tmux sessions (but keep worktree)
+	var errs []error
+
+	if i.tmuxSession != nil {
+		if err := i.tmuxSession.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close tmux session during restart: %w", err))
+		}
+	}
+
+	if i.consoleTmuxSession != nil {
+		if err := i.consoleTmuxSession.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close console tmux session during restart: %w", err))
+		}
+	}
+
+	// Return early if we couldn't close sessions cleanly
+	if len(errs) > 0 {
+		return i.combineErrors(errs)
+	}
+
+	// Create new tmux sessions with updated configuration (including --continue)
+	i.tmuxSession = tmux.NewTmuxSession(i.Title, i.Program)
+
+	// Create new console session
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/bash"
+	}
+	i.consoleTmuxSession = tmux.NewTmuxSession(i.Title+"-console", shell+" -i")
+
+	// Start the new tmux session with updated MCP configuration and --continue
+	if err := i.tmuxSession.Start(worktreePath); err != nil {
+		// If restart fails, try to restore original session if possible
+		log.ErrorLog.Printf("Failed to start new tmux session for %s: %v", i.Title, err)
+
+		// Create a new session with original program (fallback)
+		fallbackSession := tmux.NewTmuxSession(i.Title, i.Program)
+		if startErr := fallbackSession.Start(worktreePath); startErr == nil {
+			log.InfoLog.Printf("Successfully started fallback session for %s after restart failure", i.Title)
+			i.tmuxSession = fallbackSession
+			i.SetStatus(Running)
+			return fmt.Errorf("restart failed but fallback session started: %w", err)
+		}
+
+		// If both restart and fallback fail, mark as paused
+		i.SetStatus(Paused)
+		return fmt.Errorf("failed to restart tmux session and could not start fallback: %w", err)
+	}
+
+	// Start new console session
+	if err := i.consoleTmuxSession.Start(worktreePath); err != nil {
+		// Console session failure is not critical, just log it
+		log.WarningLog.Printf("Failed to start new console session for %s: %v", i.Title, err)
+	}
+
+	i.SetStatus(Running)
+	log.InfoLog.Printf("Successfully restarted Claude instance %s with new MCP configuration and --continue", i.Title)
 	return nil
 }

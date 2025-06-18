@@ -33,6 +33,7 @@ var (
 const (
 	PreviewTab = iota
 	DiffTab
+	ConsoleTab
 )
 
 type Tab struct {
@@ -51,16 +52,19 @@ type TabbedWindow struct {
 
 	preview *PreviewPane
 	diff    *DiffPane
+	console *ConsolePane
 }
 
-func NewTabbedWindow(preview *PreviewPane, diff *DiffPane) *TabbedWindow {
+func NewTabbedWindow(preview *PreviewPane, diff *DiffPane, console *ConsolePane) *TabbedWindow {
 	return &TabbedWindow{
 		tabs: []string{
 			"Preview",
 			"Diff",
+			"Console",
 		},
 		preview: preview,
 		diff:    diff,
+		console: console,
 	}
 }
 
@@ -83,6 +87,7 @@ func (w *TabbedWindow) SetSize(width, height int) {
 
 	w.preview.SetSize(contentWidth, contentHeight)
 	w.diff.SetSize(contentWidth, contentHeight)
+	w.console.SetSize(contentWidth, contentHeight)
 }
 
 func (w *TabbedWindow) GetPreviewSize() (width, height int) {
@@ -108,22 +113,67 @@ func (w *TabbedWindow) UpdateDiff(instance *session.Instance) {
 	w.diff.SetDiff(instance)
 }
 
+func (w *TabbedWindow) UpdateConsole(instance *session.Instance) error {
+	if w.activeTab != ConsoleTab {
+		return nil
+	}
+	return w.console.UpdateContent(instance)
+}
+
 // Add these new methods for handling scroll events
 func (w *TabbedWindow) ScrollUp() {
-	if w.activeTab == 1 { // Diff tab
+	if w.activeTab == 0 { // Preview tab
+		w.preview.ScrollUp()
+	} else if w.activeTab == 1 { // Diff tab
 		w.diff.ScrollUp()
+	} else if w.activeTab == 2 { // Console tab
+		w.console.ScrollUp()
 	}
 }
 
 func (w *TabbedWindow) ScrollDown() {
-	if w.activeTab == 1 { // Diff tab
+	if w.activeTab == 0 { // Preview tab
+		w.preview.ScrollDown()
+	} else if w.activeTab == 1 { // Diff tab
 		w.diff.ScrollDown()
+	} else if w.activeTab == 2 { // Console tab
+		w.console.ScrollDown()
+	}
+}
+
+func (w *TabbedWindow) FastScrollUp() {
+	if w.activeTab == 0 { // Preview tab
+		w.preview.FastScrollUp()
+	} else if w.activeTab == 1 { // Diff tab
+		w.diff.FastScrollUp()
+	} else if w.activeTab == 2 { // Console tab
+		w.console.FastScrollUp()
+	}
+}
+
+func (w *TabbedWindow) FastScrollDown() {
+	if w.activeTab == 0 { // Preview tab
+		w.preview.FastScrollDown()
+	} else if w.activeTab == 1 { // Diff tab
+		w.diff.FastScrollDown()
+	} else if w.activeTab == 2 { // Console tab
+		w.console.FastScrollDown()
 	}
 }
 
 // IsInDiffTab returns true if the diff tab is currently active
 func (w *TabbedWindow) IsInDiffTab() bool {
 	return w.activeTab == 1
+}
+
+// IsInConsoleTab returns true if the console tab is currently active
+func (w *TabbedWindow) IsInConsoleTab() bool {
+	return w.activeTab == 2
+}
+
+// GetConsole returns the console pane
+func (w *TabbedWindow) GetConsole() *ConsolePane {
+	return w.console
 }
 
 func (w *TabbedWindow) String() string {
@@ -169,8 +219,10 @@ func (w *TabbedWindow) String() string {
 	var content string
 	if w.activeTab == 0 {
 		content = w.preview.String()
-	} else {
+	} else if w.activeTab == 1 {
 		content = w.diff.String()
+	} else {
+		content = w.console.String()
 	}
 	window := windowStyle.Render(
 		lipgloss.Place(

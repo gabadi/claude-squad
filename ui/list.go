@@ -1,8 +1,11 @@
 package ui
 
 import (
+	"claude-squad/config"
 	"claude-squad/log"
+	"claude-squad/project"
 	"claude-squad/session"
+	"claude-squad/session/git"
 	"errors"
 	"fmt"
 	"strings"
@@ -52,6 +55,9 @@ var autoYesStyle = lipgloss.NewStyle().
 	Background(lipgloss.Color("#dde4f0")).
 	Foreground(lipgloss.Color("#1a1a1a"))
 
+var mcpStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#BD93F9"})
+
 type List struct {
 	items         []*session.Instance
 	selectedIdx   int
@@ -64,10 +70,10 @@ type List struct {
 	repos map[string]int
 }
 
-func NewList(spinner *spinner.Model, autoYes bool) *List {
+func NewList(spinner *spinner.Model, autoYes bool, projectManager *project.ProjectManager, cfg *config.Config) *List {
 	return &List{
 		items:    []*session.Instance{},
-		renderer: &InstanceRenderer{spinner: spinner},
+		renderer: &InstanceRenderer{spinner: spinner, projectManager: projectManager, config: cfg},
 		repos:    make(map[string]int),
 		autoyes:  autoYes,
 	}
@@ -78,6 +84,54 @@ func (l *List) SetSize(width, height int) {
 	l.width = width
 	l.height = height
 	l.renderer.setWidth(width)
+}
+
+// UpdateConfig refreshes the configuration for MCP display
+func (l *List) UpdateConfig() {
+	l.renderer.config = config.LoadConfig()
+}
+
+// TruncateBranchName truncates a branch name using suffix-preserving logic
+// This ensures the most specific part (suffix) of the branch name remains visible
+func TruncateBranchName(branchName string, maxWidth int) string {
+	if maxWidth < 0 {
+		return ""
+	}
+
+	if len(branchName) <= maxWidth {
+		return branchName
+	}
+
+	if maxWidth < 3 {
+		return ""
+	}
+
+	// Truncate from prefix (beginning) to preserve suffix (most specific part)
+	suffixLength := maxWidth - 3
+	if suffixLength > len(branchName) {
+		// This shouldn't happen given the condition above, but being safe
+		suffixLength = len(branchName)
+	}
+
+	return "..." + branchName[len(branchName)-suffixLength:]
+}
+
+// GenerateBranchNamePreview generates a preview of what the branch name would look like
+// when truncated, based on the current title input
+func GenerateBranchNamePreview(title string, maxWidth int) string {
+	if title == "" {
+		return ""
+	}
+
+	// Load config to get branch prefix
+	cfg := config.LoadConfig()
+
+	// Generate the full branch name like git.NewGitWorktree would
+	sanitizedName := git.SanitizeBranchName(title)
+	fullBranchName := fmt.Sprintf("%s%s", cfg.BranchPrefix, sanitizedName)
+
+	// Apply truncation using the same logic as the UI
+	return TruncateBranchName(fullBranchName, maxWidth)
 }
 
 // SetSessionPreviewSize sets the height and width for the tmux sessions. This makes the stdout line have the correct
@@ -102,12 +156,29 @@ func (l *List) NumInstances() int {
 
 // InstanceRenderer handles rendering of session.Instance objects
 type InstanceRenderer struct {
-	spinner *spinner.Model
-	width   int
+	spinner        *spinner.Model
+	width          int
+	projectManager *project.ProjectManager
+	config         *config.Config
 }
 
 func (r *InstanceRenderer) setWidth(width int) {
 	r.width = AdjustPreviewWidth(width)
+}
+
+// getInstanceMCPs returns the MCP server names assigned to this instance's worktree
+func (r *InstanceRenderer) getInstanceMCPs(i *session.Instance) []string {
+	if r.config == nil {
+		return nil
+	}
+
+	worktree, err := i.GetGitWorktree()
+	if err != nil {
+		return nil
+	}
+
+	worktreePath := worktree.GetWorktreePath()
+	return r.config.GetWorktreeMCPs(worktreePath)
 }
 
 // ɹ and ɻ are other options.
@@ -137,8 +208,21 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	default:
 	}
 
-	// Cut the title if it's too long
+	// Cut the title if it's too long and add project context
 	titleText := i.Title
+	if i.ProjectID != "" {
+		// Get project name instead of ID for better UX
+		if r.projectManager != nil {
+			if project, exists := r.projectManager.GetProject(i.ProjectID); exists {
+				titleText = fmt.Sprintf("[%s] %s", project.Name, i.Title)
+			} else {
+				// Fallback to ID if project not found
+				titleText = fmt.Sprintf("[%s] %s", i.ProjectID, i.Title)
+			}
+		} else {
+			titleText = fmt.Sprintf("[%s] %s", i.ProjectID, i.Title)
+		}
+	}
 	widthAvail := r.width - 3 - len(prefix) - 1
 	if widthAvail > 0 && widthAvail < len(titleText) && len(titleText) >= widthAvail-3 {
 		titleText = titleText[:widthAvail-3] + "..."
@@ -192,16 +276,7 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 		}
 	}
 	// Don't show branch if there's no space for it. Or show ellipsis if it's too long.
-	if remainingWidth < 0 {
-		branch = ""
-	} else if remainingWidth < len(branch) {
-		if remainingWidth < 3 {
-			branch = ""
-		} else {
-			// We know the remainingWidth is at least 4 and branch is longer than that, so this is safe.
-			branch = branch[:remainingWidth-3] + "..."
-		}
-	}
+	branch = TruncateBranchName(branch, remainingWidth)
 	remainingWidth -= len(branch)
 
 	// Add spaces to fill the remaining width.
@@ -212,18 +287,59 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 
 	branchLine := fmt.Sprintf("%s %s-%s%s%s", strings.Repeat(" ", len(prefix)), branchIcon, branch, spaces, diff)
 
-	// join title and subtitle
-	text := lipgloss.JoinVertical(
-		lipgloss.Left,
+	// Get assigned MCPs for this instance
+	mcps := r.getInstanceMCPs(i)
+
+	// Prepare lines for vertical joining
+	lines := []string{
 		title,
 		descS.Render(branchLine),
-	)
+	}
+
+	// Add MCP line if there are assigned MCPs
+	if len(mcps) > 0 {
+		mcpCSV := strings.Join(mcps, ", ")
+		mcpIcon := "⚙"
+
+		// Calculate available width for MCP display
+		mcpPrefixLength := 5 + 1 + len(mcpIcon) + len(" MCPs: ") // 5 spaces + icon + text
+		availableWidth := r.width - mcpPrefixLength
+
+		// Truncate MCP list if it's too long
+		if len(mcpCSV) > availableWidth {
+			if availableWidth > 3 {
+				mcpCSV = mcpCSV[:availableWidth-3] + "..."
+			} else {
+				mcpCSV = "..."
+			}
+		}
+
+		mcpLine := fmt.Sprintf("     %s MCPs: %s", mcpIcon, mcpCSV)
+		lines = append(lines, mcpStyle.Render(mcpLine))
+	}
+
+	// join title, subtitle, and optional MCP line
+	text := lipgloss.JoinVertical(lipgloss.Left, lines...)
 
 	return text
 }
 
+// generateTitleText creates the dynamic title based on active project state
+func (l *List) generateTitleText() string {
+	// Get active project from project manager
+	if l.renderer.projectManager != nil {
+		if activeProject := l.renderer.projectManager.GetActiveProject(); activeProject != nil {
+			// Format: " Instances (ProjectName) "
+			return fmt.Sprintf(" Instances (%s) ", activeProject.Name)
+		}
+	}
+	// Fallback to default when no active project
+	return " Instances "
+}
+
 func (l *List) String() string {
-	const titleText = " Instances "
+	// Generate dynamic title based on active project
+	titleText := l.generateTitleText()
 	const autoYesText = " auto-yes "
 
 	// Write the title.
