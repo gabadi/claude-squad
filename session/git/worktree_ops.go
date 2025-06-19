@@ -15,6 +15,11 @@ import (
 
 // Setup creates a new worktree for the session
 func (g *GitWorktree) Setup() error {
+	// Pull latest changes first to ensure worktree is up to date
+	if err := g.pullLatestChanges(); err != nil {
+		return fmt.Errorf("failed to pull latest changes: %w", err)
+	}
+
 	// Check if branch exists first
 	repo, err := git.PlainOpen(g.repoPath)
 	if err != nil {
@@ -227,6 +232,47 @@ func (g *GitWorktree) Prune() error {
 		return fmt.Errorf("failed to prune worktrees: %w", err)
 	}
 	return nil
+}
+
+// pullLatestChanges pulls the latest changes from the remote repository
+func (g *GitWorktree) pullLatestChanges() error {
+	// Check if repository has uncommitted changes
+	if dirty, err := g.isRepoDirty(); err != nil {
+		return fmt.Errorf("failed to check repository status: %w", err)
+	} else if dirty {
+		return fmt.Errorf("repository has uncommitted changes - please commit or stash them before creating a worktree")
+	}
+
+	// Get current branch name
+	currentBranch, err := g.getCurrentBranch()
+	if err != nil {
+		return fmt.Errorf("failed to get current branch: %w", err)
+	}
+
+	// Pull latest changes from remote
+	if _, err := g.runGitCommand(g.repoPath, "pull", "origin", currentBranch); err != nil {
+		return fmt.Errorf("git pull failed - check your SSH keys and network connection: %w", err)
+	}
+
+	return nil
+}
+
+// getCurrentBranch returns the current branch name
+func (g *GitWorktree) getCurrentBranch() (string, error) {
+	output, err := g.runGitCommand(g.repoPath, "branch", "--show-current")
+	if err != nil {
+		return "", fmt.Errorf("failed to get current branch: %w", err)
+	}
+	return strings.TrimSpace(output), nil
+}
+
+// isRepoDirty checks if the main repository has uncommitted changes
+func (g *GitWorktree) isRepoDirty() (bool, error) {
+	output, err := g.runGitCommand(g.repoPath, "status", "--porcelain")
+	if err != nil {
+		return false, fmt.Errorf("failed to check repository status: %w", err)
+	}
+	return len(strings.TrimSpace(output)) > 0, nil
 }
 
 // CleanupWorktrees removes all worktrees and their associated branches
